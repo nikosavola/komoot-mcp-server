@@ -1,129 +1,98 @@
 """Test configuration and fixtures.
 
-Installs a lightweight kompy stub before any project module is imported,
-so test environments without the real kompy package can still load
-``komoot_mcp.client`` and friends.
+Determinism contract
+--------------------
+``pytest`` must produce the same result whether or not the real ``kompy``
+/ ``openrouteservice`` packages are installed. Two rules keep that true:
+
+1. An **import stand-in** is installed for a dependency only when the
+   real package cannot be imported — ``komoot_mcp.client`` and
+   ``komoot_mcp.routing`` import them at module scope, so something must
+   be present. Those stand-ins (``tests/fakes.py``) mirror the real
+   public shape and refuse to do anything network-ish. They never
+   provide convenient behaviour, so no test can pass merely because a
+   dependency is missing.
+
+2. Tests that need working dependency behaviour **inject a fake
+   explicitly** via the ``fake_kompy_connector`` / ``fake_ors_client``
+   fixtures below. Both patch the attribute on the dependency's module
+   object, which production code resolves at call time — so the
+   injection behaves identically against the real package and against
+   the stand-in.
+
+Previously the stubs were installed "only if the import failed" *and*
+carried useful behaviour, so seven tests asserted against stub internals
+and flipped to failing as soon as the real libraries were installed.
 """
 import os
 import sys
-from types import ModuleType
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import pytest
 
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_TESTS_DIR, "..", "src"))
+# Make ``fakes`` importable from conftest and from test modules regardless
+# of how pytest was invoked.
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
 
-def _install_kompy_stub_if_missing() -> None:
-    try:
-        import kompy  # noqa: F401
-        return
-    except ModuleNotFoundError:
-        pass
-
-    class _StubTour:
-        def __init__(self, tour_id=1, name="stub"):
-            self.id = tour_id
-            self.name = name
-            self.sport = "hike"
-            self.status = "private"
-            self.distance = 5000
-            self.elevation_up = 200
-            self.elevation_down = 200
-            self.duration = 3600
-
-    class _StubAuthentication:
-        def __init__(self, email, password):
-            self._email = email
-            self._password = password
-            self._username = None
-            self._token = None
-
-        def get_username(self):
-            # Mirror real kompy behavior: raise if login hasn't populated
-            # the username, so we catch any regression that bypasses login.
-            if self._username is None:
-                raise ValueError("No username set, please login first.")
-            return self._username
-
-        def get_email_address(self):
-            return self._email
-
-        def get_password(self):
-            return self._password
-
-        def set_username(self, username):
-            self._username = username
-
-        def set_token(self, token):
-            self._token = token
-
-    class _StubConnector:
-        def __init__(self, email, password):
-            self.email = email
-            self.password = password
-            # Real kompy.KomootConnector.__init__ performs login and
-            # populates ``self.authentication`` with the username/token.
-            # Mirror that shape so ``get_user_profile`` works in tests.
-            self.authentication = _StubAuthentication(email, password)
-            self.authentication.set_username(f"user-{email}")
-            self.authentication.set_token("stub-token")
-
-        def get_tours(self, **kwargs):
-            return [_StubTour(1, f"tour-for-{self.email}")]
-
-    stub = ModuleType("kompy")
-    stub.KomootConnector = _StubConnector
-    stub.Authentication = _StubAuthentication
-    stub.Tour = _StubTour
-    sys.modules["kompy"] = stub
+from fakes import (  # noqa: E402
+    FakeKomootConnector,
+    FakeOrsClient,
+    make_kompy_stub_modules,
+    make_openrouteservice_stub_modules,
+)
 
 
-def _install_openrouteservice_stub_if_missing() -> None:
-    """Install a minimal ``openrouteservice`` stub so RoutingManager can
-    be instantiated in tests without the real ORS dependency.
+def _install_stand_in_if_absent(package: str, factory) -> bool:
+    """Install stand-in modules for ``package`` if it can't be imported.
 
-    The stub records the key it was constructed with so tests can assert
-    that the per-request key was threaded through correctly.
+    Returns ``True`` when a stand-in was installed (i.e. the real
+    dependency is absent). Both code paths leave the same *public shape*
+    in ``sys.modules``, so tests must not branch on the result.
     """
     try:
-        import openrouteservice  # noqa: F401
-        return
+        __import__(package)
+        return False
     except ModuleNotFoundError:
         pass
 
-    class _StubApiError(Exception):
-        pass
-
-    class _StubHTTPError(Exception):
-        """Mirrors openrouteservice.exceptions.HTTPError used by routing.py.
-
-        The production class is raised by the ORS client when the
-        response body can't be JSON-decoded (which used to happen on
-        every successful GPX request — see issue #11).
-        """
-
-        def __init__(self, status_code):
-            self.status_code = status_code
-            super().__init__(f"HTTP Error: {status_code}")
-
-    class _StubClient:
-        def __init__(self, key=None, base_url="https://api.openrouteservice.org", timeout=60):
-            self.key = key
-            self._base_url = base_url
-            self._timeout = timeout
-
-        def directions(self, **kwargs):  # pragma: no cover - not exercised in unit tests
-            raise NotImplementedError("RoutingManager tests should mock plan_route, not call ORS")
-
-    stub = ModuleType("openrouteservice")
-    stub.Client = _StubClient
-
-    exceptions = ModuleType("openrouteservice.exceptions")
-    exceptions.ApiError = _StubApiError
-    exceptions.HTTPError = _StubHTTPError
-    stub.exceptions = exceptions
-
-    sys.modules["openrouteservice"] = stub
-    sys.modules["openrouteservice.exceptions"] = exceptions
+    for name, module in factory().items():
+        sys.modules[name] = module
+    return True
 
 
-_install_kompy_stub_if_missing()
-_install_openrouteservice_stub_if_missing()
+KOMPY_IS_STAND_IN = _install_stand_in_if_absent("kompy", make_kompy_stub_modules)
+ORS_IS_STAND_IN = _install_stand_in_if_absent(
+    "openrouteservice", make_openrouteservice_stub_modules
+)
+
+
+@pytest.fixture
+def fake_kompy_connector(monkeypatch):
+    """Install :class:`fakes.FakeKomootConnector` as ``kompy.KomootConnector``.
+
+    ``komoot_mcp.client`` does ``import kompy`` and looks the class up on
+    the module at call time, so patching the module attribute reaches the
+    production code path without any import-order tricks — and works the
+    same with the real kompy installed.
+    """
+    import kompy
+
+    monkeypatch.setattr(kompy, "KomootConnector", FakeKomootConnector)
+    return FakeKomootConnector
+
+
+@pytest.fixture
+def fake_ors_client(monkeypatch):
+    """Install :class:`fakes.FakeOrsClient` as ``openrouteservice.Client``.
+
+    ``RoutingManager.__init__`` calls ``openrouteservice.Client(key=...)``,
+    so this lets tests assert which key a per-request manager handed to
+    its client without depending on the real client's private internals
+    (the real class stores the key as ``_key`` and has no ``key``).
+    """
+    import openrouteservice
+
+    monkeypatch.setattr(openrouteservice, "Client", FakeOrsClient)
+    return FakeOrsClient

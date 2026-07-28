@@ -212,23 +212,31 @@ class TestRoutingManagerPerRequest:
     """``get_routing_manager`` must use the per-request key, not a cached
     process-wide instance, and must return ``None`` when no key is set so
     the tool layer can render a friendly error.
+
+    The key-threading tests take the ``fake_ors_client`` fixture, which
+    swaps ``openrouteservice.Client`` for a recording fake. That keeps
+    them independent of whether the real ORS package is installed: the
+    real client stores its key privately as ``_key``, the fake exposes it
+    as ``key``, and either way we are asserting on what
+    ``RoutingManager`` passed to the constructor.
     """
 
     def test_returns_none_when_no_key_anywhere(self):
         # No env var (cleared by fixture), no ContextVar key.
         assert get_routing_manager() is None
 
-    def test_uses_contextvar_key(self):
+    def test_uses_contextvar_key(self, fake_ors_client):
         token = set_ors_api_key("ctx-key-123")
         try:
             mgr = get_routing_manager()
             assert mgr is not None
-            # The stub openrouteservice.Client records the key it got.
+            # The injected FakeOrsClient records the key it got.
+            assert isinstance(mgr.client, fake_ors_client)
             assert mgr.client.key == "ctx-key-123"
         finally:
             reset_ors_api_key(token)
 
-    def test_uses_env_var_when_contextvar_empty(self, monkeypatch):
+    def test_uses_env_var_when_contextvar_empty(self, monkeypatch, fake_ors_client):
         monkeypatch.setenv("ORS_API_KEY", "env-stdio-key")
         # Cleared state, no ContextVar — should fall back to env var.
         clear_request_state()
@@ -236,7 +244,7 @@ class TestRoutingManagerPerRequest:
         assert mgr is not None
         assert mgr.client.key == "env-stdio-key"
 
-    def test_contextvar_overrides_env_var(self, monkeypatch):
+    def test_contextvar_overrides_env_var(self, monkeypatch, fake_ors_client):
         """When both are set, the per-tenant key wins so we never leak
         a different tenant's key (or a stale dev key from env)."""
         monkeypatch.setenv("ORS_API_KEY", "env-default")
@@ -248,7 +256,7 @@ class TestRoutingManagerPerRequest:
         finally:
             reset_ors_api_key(token)
 
-    def test_two_contextvar_scopes_get_different_managers(self):
+    def test_two_contextvar_scopes_get_different_managers(self, fake_ors_client):
         """Each scope sees a manager bound to its own key."""
         keys_seen: list[str] = []
 

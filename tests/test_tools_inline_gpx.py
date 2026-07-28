@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import kompy  # the conftest stub
+import kompy  # real package, or the conftest import stand-in
 import pytest
 
 from komoot_mcp.auth import AuthManager

@@ -5,16 +5,19 @@ These exercise the multi-tenant plumbing end-to-end at the tool layer:
 - Two installed AuthManagers don't bleed across requests.
 - The login + list_tours + user_profile happy paths return strings.
 
-The kompy stub is installed in ``tests/conftest.py`` so that all
-project modules see the same in-memory ``kompy`` module — patching
-attributes on it from here works because the reference is shared.
+Tests that need a working Komoot connector take the
+``fake_kompy_connector`` fixture (see ``tests/conftest.py``), which
+patches ``kompy.KomootConnector``. ``komoot_mcp.client`` resolves that
+attribute off the shared module object at call time, so the injection
+works identically whether ``kompy`` is the real package or the import
+stand-in — and no test ever attempts a real Komoot login.
 """
 from __future__ import annotations
 
 import sys
 from unittest.mock import patch
 
-import kompy  # the conftest stub
+import kompy  # real package, or the conftest import stand-in
 import pytest
 
 from komoot_mcp.auth import AuthManager
@@ -36,7 +39,7 @@ def _reset():
 
 class TestPerRequestAuthManager:
     @pytest.mark.asyncio
-    async def test_client_uses_contextvar_auth(self):
+    async def test_client_uses_contextvar_auth(self, fake_kompy_connector):
         """The client built from ContextVar AM hits the right kompy creds."""
         am = AuthManager(email="alice@x.com", password="pw")
         token = set_auth_manager(am)
@@ -50,7 +53,7 @@ class TestPerRequestAuthManager:
             reset_auth_manager(token)
 
     @pytest.mark.asyncio
-    async def test_two_scopes_get_different_clients(self):
+    async def test_two_scopes_get_different_clients(self, fake_kompy_connector):
         """Two contexts must build clients pinned to their own AM."""
         import contextvars
 
@@ -74,7 +77,7 @@ class TestPerRequestAuthManager:
         assert b == "tour-for-bob@x.com"
 
     @pytest.mark.asyncio
-    async def test_list_tours_tool_renders_string(self):
+    async def test_list_tours_tool_renders_string(self, fake_kompy_connector):
         """The actual tool handler returns a human-readable string."""
         # Build a minimal "FastMCP-like" recorder.
         registered: dict[str, callable] = {}

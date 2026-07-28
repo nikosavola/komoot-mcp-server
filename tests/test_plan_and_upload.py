@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import kompy  # the conftest stub
+import kompy  # real package, or the conftest import stand-in
 from komoot_mcp.auth import AuthManager
 from komoot_mcp.client import KomootAPIError, KomootClient
 from komoot_mcp.context import clear_request_state
