@@ -102,11 +102,18 @@ def _patch_request(json_body=None, text="ok", status=200):
 
 
 def _stub_kompy_auth(client):
-    """Skip kompy login by injecting a stub authenticated connector."""
+    """Skip login by seeding the auth pair + a stub connector.
+
+    ``_basic_auth`` reads the ``(user_id, token)`` pair off the request's
+    AuthManager (the single authenticator), so that is what has to be
+    seeded; ``_api`` is seeded too for the kompy-object call sites.
+    """
+    client.auth.user_id = "user123"
+    client.auth.token = "tokenABC"
     client._api = SimpleNamespace(
         authentication=SimpleNamespace(
             get_username=lambda: "user123",
-            get_password=lambda: "tokenABC",
+            get_token=lambda: "tokenABC",
         )
     )
 

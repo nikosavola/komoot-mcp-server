@@ -150,6 +150,12 @@ class TestPerRequestAuthManager:
             def get_email_address(self):
                 return "frank@x.com"
 
+            def get_token(self):
+                # AuthManager mirrors (username, token) off the connector
+                # on login, so a fake connector has to expose the token
+                # accessor real kompy has.
+                return "tok"
+
         class _UnknownConnector:
             def __init__(self, email, password):
                 self.authentication = _UnknownAuth()

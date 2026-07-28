@@ -27,6 +27,8 @@ import os
 import kompy
 import requests
 
+from komoot_mcp.auth import AuthError
+
 
 class KomootAPIError(Exception):
     pass
@@ -39,15 +41,30 @@ class KomootClient:
         self._api = None
 
     def _get_api(self):
-        """Lazily create the kompy connector with stored credentials."""
+        """Borrow this request's kompy connector from the AuthManager.
+
+        Issue 05: the client used to build its *own*
+        ``kompy.KomootConnector`` here, which logged in independently of
+        ``AuthManager.login()``. A ``komoot_login`` + tour-tool flow
+        therefore performed two logins against two separate credential
+        stores, and ``komoot_login``'s answer said nothing about whether
+        the tour call would authenticate. The connector now lives on the
+        AuthManager (still per-request / ContextVar-scoped, so tenant
+        isolation is unchanged) and is created at most once per
+        credential set. See ``komoot_mcp.auth``.
+
+        ``self._api`` is retained purely as an injection point: tests
+        pre-seed it with a fake connector to exercise the kompy call
+        sites without a login.
+        """
         if self._api is None:
-            email = self.auth.email
-            password = self.auth.password
-            if not email or not password:
-                raise KomootAPIError(
-                    "KOMOOT_EMAIL and KOMOOT_PASSWORD must be set"
-                )
-            self._api = kompy.KomootConnector(email, password)
+            try:
+                self._api = self.auth.get_connector()
+            except AuthError as e:
+                # Keep the client's exception contract: every failure out
+                # of KomootClient is a KomootAPIError, which the tool
+                # layer already renders.
+                raise KomootAPIError(str(e))
         return self._api
 
     async def _call(self, fn, *args, **kwargs):
@@ -718,10 +735,11 @@ class KomootClient:
 
     # ----- Phase 2: direct REST helpers (bypass kompy) ------------------
     # The four endpoints below are not exposed by kompy. We hit them
-    # directly with Basic auth, mirroring the pattern already used by
-    # ``upload_gpx_capture_id`` — login via kompy (so we have a valid
-    # ``api.authentication`` carrying email + token-as-password), then
-    # POST/GET with ``requests`` and the same credentials.
+    # directly with Basic auth: the request's ``AuthManager`` performs
+    # the single login (via kompy's connector) and hands us the
+    # ``(user_id, token)`` pair, then we POST/GET with ``requests`` using
+    # that pair. No extra login and no second token copy — see
+    # ``_basic_auth`` and ``komoot_mcp.auth``.
     #
     # Host choice: ``api.komoot.de`` is the documented REST host that
     # accepts Basic auth (kompy itself uses it). The web app's
@@ -732,17 +750,25 @@ class KomootClient:
     def _basic_auth(self):
         """Return a ``(user_id, token)`` tuple usable as ``requests`` auth.
 
-        kompy's ``Authentication`` stores the long-lived token under
-        ``get_password()`` and the numeric user id under
-        ``get_username()`` after login. That pair is the Basic-auth
-        identity Komoot's REST API accepts (the literal email+password
-        pair only works on the v006 ``/account/email/`` login endpoint).
+        That pair is the Basic-auth identity Komoot's REST API accepts
+        for already-authenticated calls; the literal email+password pair
+        only works on the v006 ``/account/email/`` login endpoint.
+
+        Issue 05: this used to read ``api.authentication.get_password()``
+        off the client's own kompy connector. Two problems. First, it
+        bypassed ``AuthManager`` entirely, so the token that
+        ``komoot_login`` obtained was never used by anything. Second,
+        kompy's ``Authentication.get_password()`` returns the *account
+        password* it was constructed with — the long-lived token lives
+        under ``get_token()`` — so despite this docstring's promise the
+        second element was never the token. Both are fixed by sourcing
+        the pair from the single per-request authenticator, which mirrors
+        ``get_username()`` / ``get_token()`` off the one connector.
         """
-        api = self._get_api()
-        return (
-            api.authentication.get_username(),
-            api.authentication.get_password(),
-        )
+        try:
+            return self.auth.get_basic_auth()
+        except AuthError as e:
+            raise KomootAPIError(str(e))
 
     async def _http_get_json(self, url, params=None):
         """Authenticated GET that returns the parsed JSON body.

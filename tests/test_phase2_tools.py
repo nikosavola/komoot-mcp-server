@@ -26,14 +26,18 @@ class _NoLimit:
 @pytest.fixture
 def client():
     am = AuthManager(email="t@x.com", password="pw")
+    # Pre-seed the AuthManager's (user_id, token) pair — that is the
+    # single source ``_basic_auth`` reads from, so no login is attempted.
+    am.user_id = "12345"
+    am.token = "long-lived-token"
     c = KomootClient(am, _NoLimit())
-    # Pre-seed ``_api`` so ``_basic_auth`` doesn't try to construct a
-    # real kompy connector. Mirrors the pattern used by
+    # Pre-seed ``_api`` too so the kompy call sites don't construct a
+    # real connector. Mirrors the pattern used by
     # ``test_client_tour_methods._install_api_stub``.
     api = MagicMock()
     auth = MagicMock()
     auth.get_username.return_value = "12345"
-    auth.get_password.return_value = "long-lived-token"
+    auth.get_token.return_value = "long-lived-token"
     api.authentication = auth
     c._api = api
     return c
@@ -194,7 +198,9 @@ class TestGetTourWeather:
         browse_tools.register(_Mcp())
 
         am = AuthManager(email="t@x.com", password="pw")
-        # Pre-seed kompy auth so the tool's client doesn't try to log in.
+        # Pre-seed the auth pair so the tool's client doesn't try to log in.
+        am.user_id = "12345"
+        am.token = "tok"
         clear_request_state()
         token = set_auth_manager(am)
         try:
@@ -203,7 +209,7 @@ class TestGetTourWeather:
             api = MagicMock()
             auth = MagicMock()
             auth.get_username.return_value = "12345"
-            auth.get_password.return_value = "tok"
+            auth.get_token.return_value = "tok"
             api.authentication = auth
             c._api = api
 
@@ -295,12 +301,14 @@ def _install_client_with_fake_kompy_auth():
     from komoot_mcp.context import get_client, set_auth_manager
 
     am = AuthManager(email="t@x.com", password="pw")
+    am.user_id = "12345"
+    am.token = "tok"
     token = set_auth_manager(am)
     c = get_client()
     api = MagicMock()
     auth = MagicMock()
     auth.get_username.return_value = "12345"
-    auth.get_password.return_value = "tok"
+    auth.get_token.return_value = "tok"
     api.authentication = auth
     c._api = api
     return token

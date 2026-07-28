@@ -55,6 +55,8 @@ Run the server with `--transport http`. The gateway injects credentials per-requ
 
 Each request gets its own `AuthManager` + `KomootClient` via `contextvars.ContextVar`, so concurrent users never see each other's credentials. The OpenRouteService API key for `komoot_plan_route` flows through the same `X-User-Credentials` JSON payload as a per-org credential — no process-wide ORS key is needed in HTTP mode.
 
+The request-scoped `AuthManager` is the single authenticator: it owns the one `kompy.KomootConnector` for the request, so a credential set logs in to Komoot at most once no matter how many tools run, and `komoot_login`'s answer reflects the very session that later tour/data calls use. Direct-REST helpers take their Basic-auth `(user_id, token)` pair from that same session. Nothing is cached across requests.
+
 If both an env var and an `X-User-Credentials` header are present, the header wins. For `ORS_API_KEY` specifically, the env var is only consulted as a fallback when no `ors_api_key` was forwarded for the request (mainly stdio/local-dev).
 
 ## Usage with Claude

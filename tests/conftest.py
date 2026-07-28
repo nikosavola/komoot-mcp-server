@@ -49,6 +49,15 @@ def _install_kompy_stub_if_missing() -> None:
         def get_password(self):
             return self._password
 
+        def get_token(self):
+            # Mirror real kompy: the long-lived API token is a distinct
+            # value from the account password, and reading it before
+            # login is an error. AuthManager relies on this pair
+            # (username + token) as the single source of truth.
+            if self._token is None:
+                raise ValueError("No token set, please login first.")
+            return self._token
+
         def set_username(self, username):
             self._username = username
 
