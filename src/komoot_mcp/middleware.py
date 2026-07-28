@@ -27,6 +27,7 @@ Two concerns:
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -54,6 +55,36 @@ USER_CREDENTIALS_HEADER = "x-user-credentials"
 HEALTH_PATH = "/health"
 
 
+def _secrets_match(provided: str | None, expected: str | None) -> bool:
+    """Compare a caller-supplied secret against the expected one in constant time.
+
+    ``==`` on ``str`` short-circuits at the first differing character, so its
+    run time leaks how long the matching prefix was — enough to recover the
+    secret byte-by-byte over many requests. ``hmac.compare_digest`` runs in
+    time that depends only on the input lengths.
+
+    Two guards keep ``compare_digest`` from raising ``TypeError`` (which would
+    turn a would-be 401 into a 500):
+
+    * It rejects ``None``, so a missing header / unset env var returns ``False``
+      here rather than blowing up. Empty strings are treated the same way: an
+      empty secret must never authenticate anyone.
+    * It rejects non-ASCII ``str``. Authorization header bytes are decoded with
+      ``latin-1`` upstream, so a single high byte on the wire would otherwise
+      reach it, and ``os.environ`` values may hold arbitrary text too. Encoding
+      both sides first sidesteps that entirely: ``utf-8``/``surrogatepass`` is
+      total (it even round-trips the lone surrogates ``os.environ`` can carry
+      from undecodable bytes) and injective, so equality of the encoded bytes
+      means exactly what ``str`` equality used to mean.
+    """
+    if not provided or not expected:
+        return False
+    return hmac.compare_digest(
+        provided.encode("utf-8", "surrogatepass"),
+        expected.encode("utf-8", "surrogatepass"),
+    )
+
+
 class InternalSecretMiddleware:
     """Reject non-internal traffic when ``INTERNAL_SECRET`` is set.
 
@@ -67,7 +98,9 @@ class InternalSecretMiddleware:
     (server-defined unauthorized, mirrors Bitrix's -32000 shape).
 
     Env vars are read at request time so credential rotation works without
-    restart.
+    restart. Both comparisons go through :func:`_secrets_match`, which is
+    constant-time — this header is the only barrier between the public
+    internet and the MCP endpoint, so it must not leak its own contents.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -100,11 +133,14 @@ class InternalSecretMiddleware:
             else None
         )
 
-        if provided == expected_direct:
-            pass
-        elif expected_gateway is not None and provided == expected_gateway:
-            pass
-        else:
+        # Evaluate both forms before deciding, rather than `or`-ing them, so a
+        # direct-form hit doesn't skip the second comparison and leak which
+        # form matched via response time. `_secrets_match` already returns
+        # False for the unset-GATEWAY_SECRET case (expected_gateway is None).
+        direct_ok = _secrets_match(provided, expected_direct)
+        gateway_ok = _secrets_match(provided, expected_gateway)
+
+        if not (direct_ok or gateway_ok):
             response = JSONResponse(
                 {
                     "jsonrpc": "2.0",

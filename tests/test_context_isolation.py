@@ -437,3 +437,109 @@ class TestInternalSecretMiddleware:
 
         await mw(scope, receive, send)
         assert called == [True]
+
+    @pytest.mark.asyncio
+    async def test_non_http_scope_passes_through(self, monkeypatch):
+        """Lifespan/websocket scopes have no headers — never try to auth them."""
+        monkeypatch.setenv("INTERNAL_SECRET", "topsecret")
+        import importlib
+        import komoot_mcp.middleware as mod
+        importlib.reload(mod)
+
+        called = []
+        async def downstream(scope, receive, send):
+            called.append(True)
+
+        mw = mod.InternalSecretMiddleware(downstream)
+        scope = {"type": "lifespan"}
+
+        async def receive():
+            return {"type": "lifespan.startup"}
+        async def send(msg):
+            pass
+
+        await mw(scope, receive, send)
+        assert called == [True]
+
+    @pytest.mark.asyncio
+    async def test_non_ascii_header_yields_clean_401(self, monkeypatch):
+        """A high byte in the header must be a 401, not an unhandled 500.
+
+        ``hmac.compare_digest`` raises TypeError on non-ASCII ``str`` and the
+        header is decoded with latin-1, so a malformed header could otherwise
+        crash the request instead of being rejected.
+        """
+        monkeypatch.setenv("INTERNAL_SECRET", "topsecret")
+        import importlib
+        import komoot_mcp.middleware as mod
+        importlib.reload(mod)
+
+        called = []
+        async def downstream(scope, receive, send):
+            called.append(True)
+
+        mw = mod.InternalSecretMiddleware(downstream)
+        scope = {
+            "type": "http",
+            "path": "/mcp",
+            # 0xFF is not valid UTF-8 and decodes to U+00FF via latin-1.
+            "headers": [(b"authorization", b"Bearer topsecre\xff")],
+        }
+
+        captured: list[dict] = []
+        async def receive():
+            return {"type": "http.request", "body": b""}
+        async def send(msg):
+            captured.append(msg)
+
+        await mw(scope, receive, send)
+        assert called == []
+        assert captured[0]["status"] == 401
+        body = json.loads(captured[1]["body"])
+        assert body["error"]["code"] == -32001
+
+    @pytest.mark.asyncio
+    async def test_non_ascii_secret_accepted_end_to_end(self, monkeypatch):
+        """A non-ASCII INTERNAL_SECRET must still authenticate, not 500.
+
+        Whatever header bytes used to compare equal under ``==`` (the header is
+        latin-1 decoded, so these are the bytes that round-trip to the env
+        value) must still compare equal now that both sides are encoded first.
+        """
+        monkeypatch.setenv("INTERNAL_SECRET", "sécret-ü")
+        import importlib
+        import komoot_mcp.middleware as mod
+        importlib.reload(mod)
+
+        called = []
+        async def downstream(scope, receive, send):
+            called.append(True)
+
+        mw = mod.InternalSecretMiddleware(downstream)
+        scope = {
+            "type": "http",
+            "path": "/mcp",
+            "headers": [(b"authorization", "Bearer sécret-ü".encode("latin-1"))],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+        async def send(msg):
+            pass
+
+        await mw(scope, receive, send)
+        assert called == [True]
+
+    def test_secrets_match_uses_constant_time_compare(self):
+        """The helper must reject falsy inputs and never raise on them."""
+        import komoot_mcp.middleware as mod
+
+        assert mod._secrets_match("abc", "abc") is True
+        assert mod._secrets_match("abc", "abd") is False
+        # Differing lengths are safe for compare_digest, just not equal.
+        assert mod._secrets_match("abc", "abcd") is False
+        # None / empty on either side must be False rather than TypeError.
+        assert mod._secrets_match(None, "abc") is False
+        assert mod._secrets_match("abc", None) is False
+        assert mod._secrets_match("", "") is False
+        assert mod._secrets_match(None, None) is False
