@@ -24,6 +24,120 @@ def _format_gpx_response(label: str, gpx: str) -> str:
     return f"GPX for {label} ({size} bytes):\n```xml\n{gpx}\n```"
 
 
+# Manoeuvre-code -> English phrase table for turn-by-turn rendering.
+#
+# NOTE — UNVERIFIED: Komoot's ``directions=v2`` embed is not publicly
+# documented and we never live-probe the API (no credentials in CI), so
+# these codes are inferred from Komoot's GPX exports and web client. Both
+# the terse codes and hypothetical spelled-out forms are listed; anything
+# not in the table falls through to ``_humanize_direction_type``, which
+# surfaces the raw token instead of guessing a manoeuvre. If a live
+# response ever shows other codes, adding rows here is the whole fix.
+_DIRECTION_TYPE_TEXT = {
+    "S": "Start",
+    "TS": "Start",
+    "F": "Finish",
+    "TF": "Finish",
+    "C": "Continue",
+    "TC": "Continue straight",
+    "CS": "Continue straight",
+    "TL": "Turn left",
+    "TR": "Turn right",
+    "TSL": "Turn slightly left",
+    "TSR": "Turn slightly right",
+    "THL": "Turn sharply left",
+    "THR": "Turn sharply right",
+    "TU": "Make a U-turn",
+    "RA": "Enter the roundabout",
+    "EX": "Exit the roundabout",
+    "FERRY": "Take the ferry",
+    "START": "Start",
+    "FINISH": "Finish",
+    "STRAIGHT": "Continue straight",
+    "LEFT": "Turn left",
+    "RIGHT": "Turn right",
+    "SLIGHT_LEFT": "Turn slightly left",
+    "SLIGHT_RIGHT": "Turn slightly right",
+    "SHARP_LEFT": "Turn sharply left",
+    "SHARP_RIGHT": "Turn sharply right",
+    "U_TURN": "Make a U-turn",
+    "ROUNDABOUT": "Enter the roundabout",
+}
+
+# Phrases that read better with "on" than "onto" in front of a way name.
+_DIRECTION_ON_PHRASES = {"Start", "Finish", "Continue", "Continue straight"}
+
+
+def _humanize_direction_type(raw) -> str:
+    """Turn a raw manoeuvre code into a readable verb phrase.
+
+    Falls back to "Continue" when the type is missing entirely (reads
+    naturally in front of a way name) and to the raw token — spaced out
+    if it looks snake_case — when the code is unknown, so an unmapped
+    Komoot code shows up verbatim rather than as a wrong instruction.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return "Continue"
+    key = raw.strip().upper().replace("-", "_")
+    phrase = _DIRECTION_TYPE_TEXT.get(key)
+    if phrase:
+        return phrase
+    if "_" in key:
+        return key.replace("_", " ").capitalize()
+    return raw.strip()
+
+
+def _format_direction_distance(value):
+    """Render a step distance in metres, or ``None`` if unusable."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0:
+        return None
+    if value >= 1000:
+        return f"{value / 1000:.1f} km"
+    return f"{int(round(value))} m"
+
+
+def _format_direction_step(step, position: int) -> str:
+    """Render one direction step as e.g. ``3. Turn right onto Hauptstraße (250 m)``.
+
+    Steps are numbered by *position* in the list, not by the payload's
+    ``index`` field — Komoot's ``index`` is the coordinate offset along
+    the route, which would look like arbitrary jumps to a reader.
+
+    Every field is optional (see ``KomootClient._direction_to_dict``), so
+    each part is appended only when present. Critically, nothing here ever
+    ``str()``s a dict: the previous implementation did
+    ``d.get('text', str(d))`` against a serializer that produced no
+    ``text`` key at all, so users saw raw ``{'type': ...}`` reprs.
+    """
+    if not isinstance(step, dict):
+        # The client always hands us dicts; this only guards against an
+        # exotic payload, and still refuses to repr a container.
+        if isinstance(step, str) and step.strip():
+            return f"{position}. {step.strip()}"
+        return f"{position}. (unrecognized step)"
+
+    text = step.get("text")
+    if isinstance(text, str) and text.strip():
+        head = text.strip()
+    else:
+        head = _humanize_direction_type(step.get("type"))
+        street = step.get("street")
+        if isinstance(street, str) and street.strip():
+            joiner = "on" if head in _DIRECTION_ON_PHRASES else "onto"
+            head = f"{head} {joiner} {street.strip()}"
+        else:
+            cardinal = step.get("cardinal_direction")
+            if isinstance(cardinal, str) and cardinal.strip():
+                head = f"{head} heading {cardinal.strip().upper()}"
+
+    dist = _format_direction_distance(step.get("distance"))
+    if dist:
+        return f"{position}. {head} ({dist})"
+    return f"{position}. {head}"
+
+
 def register(mcp):
     @mcp.tool()
     async def komoot_get_tour_coordinates(tour_id: int) -> str:
@@ -69,22 +183,67 @@ def register(mcp):
 
     @mcp.tool()
     async def komoot_get_tour_directions(tour_id: int) -> str:
-        """Get turn-by-turn directions for a tour."""
+        """Get turn-by-turn directions for a tour.
+
+        Each step renders as ``<n>. <manoeuvre> onto <way> (<distance>)``,
+        e.g. ``3. Turn right onto Hauptstraße (250 m)``. Only the first 20
+        steps are listed; the remainder is summarized in a trailing count.
+        For how a route was composed (auto-routed vs. hand-drawn stretches)
+        use ``komoot_get_tour_segments`` instead.
+
+        Args:
+            tour_id: The numeric tour ID
+        """
         try:
             directions = await get_client().get_tour_directions(tour_id)
             if not directions:
                 return "No directions found."
-            lines = [f"Tour {tour_id} directions:"]
-            for d in directions[:20]:
-                if isinstance(d, dict):
-                    lines.append(f"  {d.get('text', str(d))}")
-                else:
-                    lines.append(f"  {d}")
+            lines = [f"Tour {tour_id} directions ({len(directions)} steps):"]
+            for position, d in enumerate(directions[:20], start=1):
+                lines.append(f"  {_format_direction_step(d, position)}")
             if len(directions) > 20:
                 lines.append(f"  ... and {len(directions) - 20} more steps")
             return "\n".join(lines)
         except Exception as e:
             return f"Error getting directions: {e}"
+
+    @mcp.tool()
+    async def komoot_get_tour_segments(tour_id: int) -> str:
+        """Get a tour's route segments (how each stretch was composed).
+
+        Segments are route-composition boundaries — e.g. a ``Routed``
+        stretch spanning path points 0-42 — NOT navigation instructions.
+        Use ``komoot_get_tour_directions`` for turn-by-turn directions.
+
+        Args:
+            tour_id: The numeric tour ID
+        """
+        try:
+            segments = await get_client().get_tour_segments(tour_id)
+            if not segments:
+                return "No segments found."
+            lines = [f"Tour {tour_id} segments ({len(segments)}):"]
+            for i, s in enumerate(segments[:20], start=1):
+                if not isinstance(s, dict):
+                    continue
+                seg_type = s.get("type") or "?"
+                start = s.get("from")
+                end = s.get("to")
+                line = f"  {i}. {seg_type}"
+                if start is not None or end is not None:
+                    line += (
+                        f" (path points {start if start is not None else '?'}"
+                        f"-{end if end is not None else '?'})"
+                    )
+                ref = s.get("reference")
+                if ref:
+                    line += f" [ref {ref}]"
+                lines.append(line)
+            if len(segments) > 20:
+                lines.append(f"  ... and {len(segments) - 20} more segments")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error getting segments: {e}"
 
     @mcp.tool()
     async def komoot_get_tour_way_types(tour_id: int) -> str:

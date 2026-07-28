@@ -206,6 +206,139 @@ class KomootClient:
         raise KomootAPIError("Could not retrieve tour as GPX")
 
     async def get_tour_directions(self, tour_id):
+        """Turn-by-turn directions for a tour, one dict per step.
+
+        This used to read ``tour.segments`` (see ``get_tour_segments``
+        below) — but Komoot *segments* are route-composition boundaries
+        ("this stretch was auto-routed, that one hand-drawn"), NOT
+        navigation instructions. The real turn-by-turn data lives in the
+        ``directions`` embed of the v007 tour endpoint, the same embed
+        ``get_tour_full`` already requests with ``directions=v2``:
+
+            GET https://api.komoot.de/v007/tours/{id}
+                ?_embedded=directions&directions=v2
+
+        The response is HAL+JSON, so the step list is normally nested at
+        ``_embedded.directions._embedded.items`` (some Komoot collections
+        flatten it to ``_embedded.directions.items``). We unwrap both
+        shapes — plus a bare list — in ``_extract_direction_items``.
+
+        NOTE — UNVERIFIED FIELD NAMES: we have no credentials in CI and
+        deliberately never live-probe the API, so the exact ``directions=
+        v2`` item keys are inferred from Komoot's GPX exports and web
+        client, not confirmed against a live response. ``_direction_to_
+        dict`` therefore treats *every* key as optional and the tool-layer
+        renderer degrades gracefully when a field is absent. If a live
+        probe ever shows different key names, add them to the candidate
+        lists in ``_direction_to_dict`` — no other code needs to change.
+        """
+        url = f"https://api.komoot.de/v007/tours/{int(tour_id)}"
+        params = {"_embedded": "directions", "directions": "v2"}
+        payload = await self._http_get_json(url, params=params)
+        items = self._extract_direction_items(payload)
+        return [self._direction_to_dict(d) for d in items]
+
+    @staticmethod
+    def _extract_direction_items(payload):
+        """Dig the direction step list out of a HAL(-ish) payload.
+
+        Tolerates every shape we might plausibly be handed:
+
+        * the full tour dict  -> ``_embedded.directions[._embedded].items``
+        * a directions collection -> ``_embedded.items`` / ``items``
+        * an already-unwrapped bare list
+
+        Anything else yields ``[]`` rather than raising — a surprising
+        payload must never turn into a stack trace in a tool result.
+        """
+        node = payload
+        # Bounded unwrap: at most a handful of envelope levels exist, and
+        # a bound keeps us safe against a self-referential structure.
+        for _ in range(6):
+            if isinstance(node, list):
+                return node
+            if not isinstance(node, dict):
+                return []
+            nxt = None
+            for key in ("items", "directions", "_embedded"):
+                val = node.get(key)
+                if isinstance(val, (list, dict)):
+                    nxt = val
+                    break
+            if nxt is None:
+                return []
+            node = nxt
+        return []
+
+    @staticmethod
+    def _direction_to_dict(direction):
+        """Normalize one raw direction step into a flat, stable dict.
+
+        Emitted keys — all may be ``None``:
+
+        * ``index``  — coordinate index the step sits at (NOT a step
+          number; the tool layer numbers steps by position)
+        * ``type``   — manoeuvre code, e.g. ``"TL"`` / ``"turn_left"``
+        * ``street`` — the way being entered (``street``/``name``/``way``)
+        * ``distance`` — metres covered by the step
+        * ``cardinal_direction`` — e.g. ``"NE"``
+        * ``last_similar`` — Komoot's "collapse consecutive identical
+          steps up to here" marker, kept for callers that want it
+        * ``text`` — a pre-rendered instruction, only if the API ever
+          supplies one (Komoot localizes client-side, so normally absent)
+
+        See the ``get_tour_directions`` note: these key names are
+        inferred, not live-verified, hence the per-field candidate lists
+        and the total absence of required keys.
+        """
+        if not isinstance(direction, dict):
+            # Defensive: an unexpected item shape. Only surface it when
+            # it is a plain string — never ``str()`` a container, which
+            # is exactly how the old renderer leaked Python dict reprs
+            # into tool output.
+            return {
+                "index": None,
+                "type": None,
+                "street": None,
+                "distance": None,
+                "cardinal_direction": None,
+                "last_similar": None,
+                "text": direction if isinstance(direction, str) else None,
+            }
+
+        def _first(*keys):
+            for key in keys:
+                val = direction.get(key)
+                # Komoot sometimes nests a named object (e.g.
+                # ``way: {"name": ...}``) where a bare string could sit.
+                if isinstance(val, dict):
+                    val = val.get("name")
+                if val is not None and val != "":
+                    return val
+            return None
+
+        return {
+            "index": _first("index", "coordinate_index", "start_index"),
+            "type": _first("type", "direction_type", "instruction_type"),
+            "street": _first("street", "name", "way", "way_name", "road"),
+            "distance": _first("distance", "distance_meters", "length"),
+            "cardinal_direction": _first(
+                "cardinal_direction", "cardinal", "direction",
+            ),
+            "last_similar": _first("last_similar", "complex"),
+            "text": _first("text", "instruction", "description"),
+        }
+
+    async def get_tour_segments(self, tour_id):
+        """Route *segment boundaries* for a tour (not directions).
+
+        Each Komoot segment records how a stretch of the route was
+        composed (``Routed`` vs. manually drawn) and the path index range
+        it spans. This is the data ``get_tour_directions`` used to return
+        by mistake; it is kept here under an honest name and rendered by
+        ``komoot_get_tour_segments`` with its real ``type``/``from``/
+        ``to`` fields.
+        """
         api = self._get_api()
         tour = await self._call(api.get_tour_by_id, str(tour_id))
         if isinstance(tour, kompy.Tour):

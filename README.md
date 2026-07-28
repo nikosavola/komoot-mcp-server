@@ -114,7 +114,8 @@ Once connected, you can ask Claude things like:
 |---|---|
 | `komoot_get_tour_coordinates` | Get the coordinate array (lat, lng, altitude) for a tour |
 | `komoot_get_tour_gpx` | Return a tour's GPX content inline in the tool response as a fenced `xml` code block. Oversized bodies are truncated; the full byte count is always reported. |
-| `komoot_get_tour_directions` | Get turn-by-turn directions for a tour |
+| `komoot_get_tour_directions` | Get turn-by-turn directions for a tour, e.g. `3. Turn right onto Hauptstraße (250 m)` (first 20 steps, then a remaining-step count) |
+| `komoot_get_tour_segments` | Get the tour's route segments — how each stretch was composed (`Routed` vs. hand-drawn) and the path-point range it spans. Not navigation instructions. |
 | `komoot_get_tour_way_types` | Get the way type breakdown (road, trail, path percentages) |
 | `komoot_get_tour_surfaces` | Get the surface breakdown (paved, gravel, trail percentages) |
 | `komoot_get_tour_timeline` | Get the event timeline for a tour |
