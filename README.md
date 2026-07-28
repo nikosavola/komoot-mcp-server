@@ -41,7 +41,6 @@ In stdio mode, credentials come from environment variables.
 | `KOMOOT_EMAIL` | Your Komoot account email address |
 | `KOMOOT_PASSWORD` | Your Komoot account password |
 | `ORS_API_KEY` | Optional [OpenRouteService API key](https://openrouteservice.org) — enables the `komoot_plan_route` tool |
-| `KOMOOT_DATA_DIR` | _Vestigial._ Previously used to stage GPX files on the server's filesystem. The GPX tools now return content inline in the tool response (see [issue #9](https://github.com/Eric-AI-M/komoot-mcp-server/issues/9)); this var is accepted for back-compat but unused. |
 | `KOMOOT_RATE_LIMIT` | Outbound requests per second to Komoot. Default `2` |
 
 ### Platform-integration mode (Eric AI gateway)
@@ -189,6 +188,22 @@ The `komoot_plan_route` tool supports these sport profiles, each mapped to an Op
 - [kompy](https://pypi.org/project/kompy/) — Komoot API client (pinned `<0.1.0`; we depend on a few `Tour._create_*` internals)
 - [gpxpy](https://pypi.org/project/gpxpy/) — GPX parsing for uploads
 - [openrouteservice](https://pypi.org/project/openrouteservice/) — OpenRouteService client (optional, for route planning)
+
+All runtime dependencies carry a major-version upper bound so a fresh install can't
+silently resolve to an untested major release.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest          # test suite
+ruff check .    # lint (config lives in pyproject.toml)
+```
+
+Ruff's rule set is intentionally conservative (`E`/`W`/`F`) so that `ruff check`
+passes on the tree as-is. `I` (import sorting), `B` and `UP` are noted in
+`pyproject.toml` as candidates for a follow-up pass, and `ruff format` is left
+unwired because adopting it is a whole-repo reformat that deserves its own commit.
 
 ## License
 

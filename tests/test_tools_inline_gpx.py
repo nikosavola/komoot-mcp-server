@@ -17,17 +17,9 @@ openrouteservice stubs installed by ``conftest.py`` plus per-test
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import kompy  # the conftest stub
 import pytest
 
-from komoot_mcp.auth import AuthManager
-from komoot_mcp.context import (
-    clear_request_state,
-    reset_auth_manager,
-    set_auth_manager,
-)
+from komoot_mcp.context import clear_request_state
 
 
 @pytest.fixture(autouse=True)

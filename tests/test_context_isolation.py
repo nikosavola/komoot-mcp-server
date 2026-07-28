@@ -6,7 +6,6 @@ operation behind the platform gateway.
 """
 import asyncio
 import json
-import os
 
 import pytest
 

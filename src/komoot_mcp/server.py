@@ -9,10 +9,7 @@ Runs as either:
   ``middleware.py`` for the wire format.
 """
 
-import sys
 import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import kompy  # the conftest stub
 import pytest
 
 from komoot_mcp.auth import AuthManager
@@ -95,8 +94,6 @@ class TestUploadFromGpxContent:
     ):
         """Sentinel: prove no disk reads happen on the gpx_content path."""
         _install_mock_api(client)
-
-        real_open = open
 
         def guarded_open(path, mode="r", *args, **kwargs):
             raise AssertionError(

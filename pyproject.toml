@@ -4,12 +4,15 @@ version = "0.1.0"
 description = "MCP server for Komoot — browse tours, download GPX, plan routes with AI assistance"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0.0",
+    # Upper bounds are major-version caps: a new major of any of these can
+    # change public API, and an unbounded floor lets a fresh `pip install`
+    # resolve to something this code has never been tested against.
+    "mcp>=1.0.0,<2.0.0",
     # Pinned <0.1.0 because we rely on kompy Tour._create_* internals
     # (see client.py docstring) which may change without notice.
     "kompy>=0.0.12,<0.1.0",
-    "openrouteservice>=2.3.0",
-    "gpxpy>=1.6.0",
+    "openrouteservice>=2.3.0,<3.0.0",
+    "gpxpy>=1.6.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +20,10 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "vcrpy>=6.0",
+    # Left unbounded deliberately: ruff is pre-1.0 and minor releases can
+    # add or change rules, so pin this to an exact version if lint results
+    # start drifting between developer machines and CI.
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -28,3 +35,30 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+# 120 rather than ruff's default 88: the existing code already wraps at
+# roughly this width, and a narrower limit would mean reflowing most of
+# the tool modules for no real benefit.
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["build", "dist"]
+
+# NOTE: `ruff format` is deliberately NOT wired in. It would reformat 31 of
+# the 35 Python files here, which is worth doing as its own standalone
+# commit rather than smuggling into an unrelated change.
+
+[tool.ruff.lint]
+# Deliberately conservative starting set, chosen so `ruff check` passes on
+# the tree as it stands today (verified against ruff 0.15.8). Candidates to
+# enable once someone is willing to land the one-time mechanical fixup each
+# requires — counts measured on this tree:
+#   "I"  — isort: 29 unsorted-imports, all auto-fixable.
+#   "B"  — flake8-bugbear: 22 raise-without-from-inside-except, hand fixes.
+#   "UP" — pyupgrade: 5, mostly typing.Optional -> X | None.
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes (undefined names, unused imports)
+]

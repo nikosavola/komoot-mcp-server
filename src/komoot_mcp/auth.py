@@ -39,7 +39,7 @@ class AuthManager:
             self.user_id = data.get("username")
             self.token = data.get("password")
             if not self.user_id or not self.token:
-                raise AuthError(f"Unexpected login response: missing user_id or token")
+                raise AuthError("Unexpected login response: missing user_id or token")
         except requests.exceptions.RequestException as e:
             raise AuthError(f"Login failed: {e}")
 

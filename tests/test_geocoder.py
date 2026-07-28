@@ -9,7 +9,10 @@ class TestGeocoder:
         mock_response = {
             "features": [{
                 "geometry": {"coordinates": [13.404954, 52.520008]},
-                "properties": {"name": "Berlin", "city": "Berlin", "country": "Germany", "type": "city", "osm_id": 12345}
+                "properties": {
+                    "name": "Berlin", "city": "Berlin", "country": "Germany",
+                    "type": "city", "osm_id": 12345,
+                },
             }]
         }
         with patch("urllib.request.urlopen") as mock_urlopen:
