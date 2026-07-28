@@ -11,3 +11,10 @@ venv/
 
 # Graphify code-graph output
 graphify-out/
+
+# Ephemeral git worktrees created for isolated agent runs. These are
+# scratch checkouts (each holds a .git pointer file, not real content)
+# and are removed when the run finishes — never commit them. Scoped to
+# the worktrees subdir so genuine project config under .claude/
+# (settings, skills, agents) can still be tracked.
+.claude/worktrees/
