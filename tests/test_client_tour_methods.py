@@ -22,7 +22,7 @@ import kompy  # the conftest stub
 import pytest
 
 from komoot_mcp.auth import AuthManager
-from komoot_mcp.client import KomootClient
+from komoot_mcp.client import KomootAPIError, KomootClient
 
 
 class _NoLimit:
@@ -284,3 +284,74 @@ class TestGetTourGpxInline:
 
         out = await client.get_tour_gpx(42)
         assert out == "<gpx>inline</gpx>"
+
+
+class TestListToursSortDirection:
+    """Issue: ``sort_direction`` was documented but never forwarded.
+
+    ``list_tours`` accepted ``sort_direction`` and the
+    ``komoot_list_tours`` tool exposed it, but it was left out of the
+    kwargs handed to kompy — a silent no-op. kompy spells the direction
+    parameter ``sort`` (it maps it onto the ``sort_direction`` query
+    param internally), so the fix forwards it under that name.
+    """
+
+    def _spy_api(self, client):
+        api = MagicMock()
+        api.get_tours = MagicMock(return_value=[])
+        client._api = api
+        return api
+
+    @pytest.mark.asyncio
+    async def test_forwards_direction_as_kompy_sort_kwarg(self, client):
+        api = self._spy_api(client)
+        await client.list_tours(sort_direction="asc")
+        kwargs = api.get_tours.call_args.kwargs
+        # The whole point of the bug: this kwarg used to be absent.
+        assert kwargs["sort"] == "asc"
+        # Our own parameter name must never leak to kompy — it would
+        # raise TypeError against the real signature.
+        assert "sort_direction" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_default_direction_is_forwarded_too(self, client):
+        api = self._spy_api(client)
+        await client.list_tours()
+        assert api.get_tours.call_args.kwargs["sort"] == "desc"
+
+    @pytest.mark.asyncio
+    async def test_direction_is_normalised_case_insensitively(self, client):
+        api = self._spy_api(client)
+        await client.list_tours(sort_direction="ASC")
+        # kompy compares against the exact lowercase literals, so an
+        # un-normalised "ASC" would be rejected downstream.
+        assert api.get_tours.call_args.kwargs["sort"] == "asc"
+
+    @pytest.mark.asyncio
+    async def test_invalid_direction_raises_instead_of_being_ignored(self, client):
+        self._spy_api(client)
+        with pytest.raises(KomootAPIError) as exc:
+            await client.list_tours(sort_direction="sideways")
+        assert "sort_direction" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_none_direction_omits_the_kwarg(self, client):
+        api = self._spy_api(client)
+        await client.list_tours(sort_direction=None)
+        # Explicit opt-out: let kompy apply its own default.
+        assert "sort" not in api.get_tours.call_args.kwargs
+
+    def test_kwarg_name_matches_real_kompy_signature(self):
+        """Pin the kwarg name against the installed kompy.
+
+        Skipped when the test run uses the lightweight conftest stub,
+        whose ``get_tours(**kwargs)`` accepts anything and so cannot
+        catch a rename in a future kompy release.
+        """
+        import inspect
+
+        params = inspect.signature(kompy.KomootConnector.get_tours).parameters
+        if "kwargs" in params:
+            pytest.skip("running against the conftest kompy stub")
+        assert "sort" in params
+        assert "sort_direction" not in params

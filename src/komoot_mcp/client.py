@@ -122,6 +122,22 @@ class KomootClient:
             "page": page,
             "sort_field": sort_field,
         }
+        # kompy names the sort *direction* parameter ``sort`` (it maps it
+        # to the ``sort_direction`` query param internally), NOT
+        # ``sort_direction`` — passing our own name would be a TypeError.
+        # Previously the value was simply dropped, making the documented
+        # ``sort_direction`` option a silent no-op. kompy validates
+        # ``sort`` against the exact lowercase strings 'asc'/'desc', so we
+        # normalise case here and reject anything else with a clear error
+        # rather than quietly ignoring it.
+        if sort_direction is not None:
+            direction = str(sort_direction).strip().lower()
+            if direction not in ("asc", "desc"):
+                raise KomootAPIError(
+                    f"Invalid sort_direction {sort_direction!r}: "
+                    "expected 'asc' or 'desc'"
+                )
+            kwargs["sort"] = direction
         if sport_type:
             kwargs["sport_types"] = sport_type
         if status:
